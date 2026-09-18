@@ -1,0 +1,56 @@
+# dependencies
+node_modules/
+mini-services/po-trader/node_modules/
+
+# next.js
+.next/
+out/
+
+# production builds
+dist/
+
+# database (SQLite — runtime data, never commit)
+db/*.db
+db/*.db-journal
+*.sqlite
+
+# environment / secrets
+.env
+.env.local
+.env.production
+mini-services/po-trader/tg-config.json
+
+# logs
+dev.log
+server.log
+*.log
+logs/
+
+# runtime state
+db/*.db-journal
+!db/.gitkeep
+
+# sandbox / internal tooling artifacts
+tool-results/
+upload/
+download/
+--full-page
+tests/*.png
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# sandbox-internal tooling (not part of the open-source project)
+skills/
+.zscripts/
+examples/
+Caddyfile
+.next-env*
+
+# internal dev artifacts
+tsconfig.tsbuildinfo
+worklog.md

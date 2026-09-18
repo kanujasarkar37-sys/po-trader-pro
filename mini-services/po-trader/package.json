@@ -1,0 +1,12 @@
+{
+  "name": "po-trader-service",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "bun --hot index.ts"
+  },
+  "dependencies": {
+    "socket.io": "^4.8.3",
+    "ws": "^8.18.0"
+  }
+}

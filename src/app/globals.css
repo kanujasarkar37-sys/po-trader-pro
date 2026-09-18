@@ -1,0 +1,386 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* ─── PO Trader Pro custom styling ─────────────────────────────────────── */
+
+/* Custom scrollbars — thin, dark, emerald thumb on hover */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: oklch(0.32 0.01 260);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.55 0.12 160);
+  background-clip: content-box;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: oklch(0.32 0.01 260) transparent;
+}
+
+/* Ticker tape marquee — seamless loop */
+@keyframes ticker-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.ticker-track {
+  animation: ticker-scroll 55s linear infinite;
+  will-change: transform;
+}
+.ticker-track:hover {
+  animation-play-state: paused;
+}
+
+/* Subtle pulsing glow for live price */
+@keyframes price-glow {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+.price-glow {
+  animation: price-glow 2.4s ease-in-out infinite;
+}
+
+/* Card hover lift */
+.card-lift {
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.card-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px -12px oklch(0.7 0.15 162 / 0.15);
+}
+
+/* Gradient top line for the app shell */
+.app-shell::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 50;
+  background: linear-gradient(90deg, transparent, oklch(0.7 0.15 162), oklch(0.75 0.18 85), oklch(0.65 0.2 25), transparent);
+}
+
+/* Focus-visible ring for a11y */
+button:focus-visible,
+[role='switch']:focus-visible,
+[role='slider']:focus-visible {
+  outline: 2px solid oklch(0.7 0.15 162 / 0.8);
+  outline-offset: 2px;
+}
+
+/* Trading-terminal grid backdrop */
+.terminal-grid {
+  background-image:
+    linear-gradient(oklch(1 0 0 / 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, oklch(1 0 0 / 0.025) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+
+/* ─── v6 polish layer ─────────────────────────────────────────────────── */
+
+/* Refined scroll container for dense panels (calendar/events/trades) */
+.pretty-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: oklch(0.35 0.012 260) transparent;
+  overscroll-behavior: contain;
+}
+.pretty-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.pretty-scroll::-webkit-scrollbar-thumb {
+  background: oklch(0.35 0.012 260);
+  border: none;
+}
+.pretty-scroll::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.55 0.12 160);
+}
+
+/* Panel header hairline gradient — subtle depth on every bordered panel */
+.panel-header-polish {
+  background-image: linear-gradient(180deg, oklch(1 0 0 / 0.03), transparent);
+}
+
+/* Fresh signal row entrance — slide + fade */
+@keyframes fade-slide-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-slide-in {
+  animation: fade-slide-in 0.25s ease-out;
+}
+
+/* Red-zone banner — urgent pulse */
+@keyframes red-zone-pulse {
+  0%, 100% { box-shadow: inset 0 0 0 0 oklch(0.6 0.22 25 / 0); }
+  50% { box-shadow: inset 0 0 24px -8px oklch(0.6 0.22 25 / 0.45); }
+}
+.red-zone-pulse {
+  animation: red-zone-pulse 2.2s ease-in-out infinite;
+}
+
+/* Skeleton shimmer for loading placeholders */
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg, oklch(0.24 0 0) 25%, oklch(0.31 0 0) 50%, oklch(0.24 0 0) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+/* TAKE button — attention micro-glow while a signal is actionable */
+@keyframes take-glow {
+  0%, 100% { box-shadow: 0 0 0 0 oklch(0.75 0.16 162 / 0.0); }
+  50% { box-shadow: 0 0 12px -2px oklch(0.75 0.16 162 / 0.55); }
+}
+.take-glow-call {
+  animation: take-glow 1.8s ease-in-out infinite;
+}
+@keyframes take-glow-red {
+  0%, 100% { box-shadow: 0 0 0 0 oklch(0.65 0.2 25 / 0.0); }
+  50% { box-shadow: 0 0 12px -2px oklch(0.65 0.2 25 / 0.55); }
+}
+.take-glow-put {
+  animation: take-glow-red 1.8s ease-in-out infinite;
+}
+
+/* Tabular micro-typography — aligned numerals everywhere */
+.num {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Sticky-safe hairline under panels on scroll containers */
+.hairline-b {
+  border-bottom: 1px solid oklch(1 0 0 / 0.06);
+}
+
+/* ─── v7 polish layer ─────────────────────────────────────────────────── */
+
+/* Keyboard kbd chips — unified terminal look */
+kbd {
+  display: inline-block;
+  line-height: 1;
+  border-radius: 4px;
+  box-shadow: 0 1px 0 oklch(0 0 0 / 0.7), 0 0 0 1px oklch(1 0 0 / 0.06) inset;
+}
+
+/* Balance flash on change — emerald up / red down */
+@keyframes flash-up {
+  0% { color: oklch(0.8 0.16 162); text-shadow: 0 0 14px oklch(0.8 0.16 162 / 0.8); }
+  100% { color: inherit; text-shadow: none; }
+}
+@keyframes flash-down {
+  0% { color: oklch(0.7 0.2 25); text-shadow: 0 0 14px oklch(0.7 0.2 25 / 0.8); }
+  100% { color: inherit; text-shadow: none; }
+}
+.flash-up { animation: flash-up 0.9s ease-out; }
+.flash-down { animation: flash-down 0.9s ease-out; }
+
+/* Sparkline path draw-in */
+@keyframes spark-draw {
+  from { stroke-dashoffset: var(--spark-len, 120); }
+  to { stroke-dashoffset: 0; }
+}
+.spark-line {
+  stroke-dasharray: var(--spark-len, 120);
+  animation: spark-draw 0.8s ease-out;
+}
+
+/* Panel entrance — first-paint staggered fade */
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.panel-in {
+  animation: panel-in 0.35s ease-out backwards;
+}
+
+/* Chip quick-select buttons — tactile press */
+.chip-press {
+  transition: background-color 0.12s ease, color 0.12s ease, transform 0.08s ease;
+}
+.chip-press:active {
+  transform: scale(0.92);
+}
+
+/* Calibration bar hover detail */
+.cal-row {
+  transition: background-color 0.15s ease;
+}
+.cal-row:hover {
+  background-color: oklch(1 0 0 / 0.04);
+}
+
+/* cache-bust 1789309200 */
+
+/* ═══ v8 polish layer — telegram bridge + trade-detail dialog ═══ */
+
+/* thin scrollbars for dialog/panel interiors (matches pretty-scroll) */
+.scroll-thin { scrollbar-width: thin; scrollbar-color: oklch(0.35 0 0 / 0.6) transparent; }
+.scroll-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+.scroll-thin::-webkit-scrollbar-thumb { border-radius: 3px; background: oklch(0.35 0 0 / 0.6); }
+.scroll-thin::-webkit-scrollbar-thumb:hover { background: oklch(0.45 0 0 / 0.8); }
+.scroll-thin::-webkit-scrollbar-track { background: transparent; }
+
+/* Trade-detail dialog entrance */
+@keyframes dialog-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.dialog-in {
+  animation: dialog-in 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Signal component bars — subtle width transition when dialog opens */
+.comp-bar {
+  transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 0 6px oklch(1 0 0 / 0.05) inset;
+}
+
+/* Telegram LIVE chip — breathing glow while long-polling */
+@keyframes tg-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 oklch(0.7 0.15 162 / 0.45); }
+  50% { box-shadow: 0 0 0 4px oklch(0.7 0.15 162 / 0); }
+}
+.tg-pulse { animation: tg-pulse 2.2s ease-in-out infinite; }
+
+/* range input (signal alert bar) — emerald thumb on zinc track */
+input[type='range'] {
+  accent-color: oklch(0.7 0.15 162);
+}
+input[type='range']::-webkit-slider-thumb {
+  cursor: pointer;
+}
+
+/* cache-bust 1789315900 */

@@ -1,0 +1,35 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Render Blueprint — one-click deploy of PO Trader Pro
+#
+# Deploy:  Repo → New → Blueprint (or append ?blueprint=... to the Render
+#          "new from repo" flow) — Render reads this file automatically.
+# Docs:    https://render.com/docs/blueprint-spec
+#
+# NOTE (24/7 operation): free web services spin down after 15 minutes without
+# HTTP traffic, which pauses the bot. For an always-on trading bot choose the
+# Starter plan (or higher) when deploying, or ping /healthz on a schedule.
+#
+# NOTE (persistent data): the SQLite database lives inside the container by
+# default. To persist trades/config across deploys, add a disk:
+#
+#   disks:
+#     - name: po-trader-data
+#       mountPath: /data
+#   envVars:
+#     - key: DATABASE_URL
+#       value: file:/data/custom.db
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  - type: web
+    name: po-trader-pro
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        value: file:/app/db/custom.db
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
