@@ -54,3 +54,7 @@ Caddyfile
 # internal dev artifacts
 tsconfig.tsbuildinfo
 worklog.md
+
+# agent build artifacts (development process docs)
+agent-ctx/
+upload/

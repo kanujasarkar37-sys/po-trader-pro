@@ -14,6 +14,7 @@ import { analyze, nextCandleOpen } from './src/signal-engine'
 import { backtest, type BacktestResult } from './src/backtest'
 import { calendarSnapshot, redZone, type CalendarSnapshot } from './src/calendar'
 import { TelegramBridge } from './src/telegram'
+import { DerivClient, DERIV_CATALOG, marketOpenNow, isFxWeekendNow, type DerivSymbolDef } from './src/deriv'
 import {
   ASSET_UNIVERSE, assetName, assetCategory, assetDigits, DEFAULT_PAYOUT,
 } from './src/assets'
@@ -24,24 +25,33 @@ const PORT = 3030
 const NEXT_API = process.env.ENGINE_NEXT_API ?? 'http://localhost:3000/api'
 const MAX_CANDLES = 2000
 const SCAN_CANDLES = 500
-const CODE_VERSION = 'v9-accuracy'
+const CODE_VERSION = 'v10-deriv'
 const COOLDOWN_LOSSES = 2 // consecutive losses that trigger a cooldown
 const COOLDOWN_MS = 3 * 60 * 1000 // 3-minute per-asset cooldown
 const MOVERS_LOOKBACK = 15 // candles (~15 min) for top-movers ranking
 const ADAPTIVE_MIN_TRADES = 8 // minimum settled bot trades before tuning an asset
 const ADAPTIVE_MIN_BIN = 4 // minimum trades inside a confidence bin to trust it
 const ADAPTIVE_RECOMPUTE_MS = 30_000 // throttle between recomputes
+const DERIV_MOVERS_BATCH = 5 // symbols per movers-refresh round (round-robin)
 
 // ═══════════════════════════ Trading Engine ═══════════════════════════════
 
 class TradingEngine {
   io: Server | null = null
-  mode: 'disconnected' | 'live' | 'simulation' = 'disconnected'
+  mode: 'disconnected' | 'live' | 'simulation' | 'deriv' = 'disconnected'
   config: BotConfig = { ...DEFAULT_CONFIG }
   candles = new CandleManager(MAX_CANDLES)
   assets = new Map<string, AssetInfo>()
   po = new PocketOptionClient()
   sim = new MarketSimulator()
+  deriv = new DerivClient()
+  derivAuthorized = false
+  derivToken: string | null = null
+  derivSymbolsOk = 0
+  derivMoversCursor = 0
+  derivMoversTimer: ReturnType<typeof setInterval> | null = null
+  derivContractTimer: ReturnType<typeof setInterval> | null = null
+  derivBalanceTimer: ReturnType<typeof setInterval> | null = null
   accountType: 'demo' | 'real' = 'demo'
   balances: { demo: number | null; real: number | null } = { demo: null, real: null }
   simBalance = { demo: 10000, real: 1000 }
@@ -83,6 +93,7 @@ class TradingEngine {
     this.initAssets()
     this.wireLive()
     this.wireSim()
+    this.wireDeriv()
     // host adapter: engine surface exposed to the Telegram bridge
     this.tg.boot({
       startBot: () => this.startBot(),
@@ -105,6 +116,43 @@ class TradingEngine {
         payout: a.payout, open: true, price: a.basePrice,
       })
     }
+  }
+
+  /** Swap the asset universe to the Deriv catalog (mode switch). */
+  initDerivAssets() {
+    this.assets.clear()
+    const weekend = isFxWeekendNow()
+    for (const def of DERIV_CATALOG) {
+      const open = marketOpenNow(def)
+      this.assets.set(def.symbol, {
+        asset: def.symbol,
+        name: def.name,
+        category: def.category,
+        payout: 92,
+        open,
+        digits: def.digits,
+        closedReason: open ? undefined : weekend
+          ? 'Closed — weekend (synthetics & crypto still open 24/7)'
+          : 'Market closed',
+      })
+    }
+    this.broadcast('assets', this.assetList())
+  }
+
+  /** Refresh open/closed flags (forex weekend handling, probe results). */
+  refreshDerivMarketStatus() {
+    if (this.mode !== 'deriv') return
+    const weekend = isFxWeekendNow()
+    for (const def of DERIV_CATALOG) {
+      const info = this.assets.get(def.symbol)
+      if (!info) continue
+      const open = marketOpenNow(def)
+      info.open = open
+      info.closedReason = open ? undefined : weekend
+        ? 'Closed — weekend (synthetics & crypto still open 24/7)'
+        : 'Market closed'
+    }
+    this.broadcast('assets', this.assetList())
   }
 
   ingestUpdateAssets(payload: unknown) {
@@ -218,11 +266,261 @@ class TradingEngine {
     }
   }
 
+  // ─── Deriv mode wiring (live market data — free, no key needed) ─────────
+  wireDeriv() {
+    this.deriv.on('log', (msg: string) => this.log(`[DERIV] ${msg}`))
+    this.deriv.on('connected', () => {
+      this.broadcast('state', this.snapshot())
+    })
+    this.deriv.on('streamingMode', (enabled: boolean) => {
+      this.broadcast('state', this.snapshot())
+      if (!enabled) this.log('ℹ Deriv live data via ~5s polling (streams unavailable in this region)')
+    })
+    this.deriv.on('symbolOk', (symbol: string, digits: number) => {
+      this.derivSymbolsOk++
+      const info = this.assets.get(symbol)
+      if (info) info.digits = digits
+      // progressive asset-list updates while probing
+      if (this.derivSymbolsOk % 10 === 0) this.broadcast('assets', this.assetList())
+    })
+    this.deriv.on('symbolBad', (symbol: string) => {
+      const info = this.assets.get(symbol)
+      if (info) {
+        info.open = false
+        info.closedReason = 'Unavailable for this account/region'
+      }
+    })
+    this.deriv.on('authOk', (account) => {
+      this.derivAuthorized = true
+      this.accountType = account.isVirtual ? 'demo' : 'real'
+      this.balances[this.accountType] = account.balance
+      this.log(`🔑 Deriv ${account.isVirtual ? 'DEMO (virtual)' : 'REAL'} account connected: ${account.loginid} · ${account.currency} ${account.balance.toFixed(2)}`)
+      this.broadcast('state', this.snapshot())
+      this.broadcast('balance', this.balanceSnapshot())
+    })
+    this.deriv.on('authFail', () => {
+      this.derivAuthorized = false
+      this.broadcast('state', this.snapshot())
+    })
+    this.deriv.on('balance', (balance: number) => {
+      this.balances[this.accountType] = balance
+      this.broadcast('balance', this.balanceSnapshot())
+    })
+    this.deriv.on('candles', (symbol: string, candles: Candle[]) => {
+      if (!candles?.length) return
+      const before = this.candles.count(symbol)
+      this.candles.mergeCandles(symbol, candles)
+      const info = this.assets.get(symbol)
+      if (info) {
+        info.price = candles[candles.length - 1].close
+        // staleness detection: market may be closed despite the static calendar
+        const ageSec = Date.now() / 1000 - candles[candles.length - 1].time
+        if (ageSec > 180 && info.open) {
+          info.open = false
+          info.closedReason = 'No recent price movement — market likely closed'
+        }
+      }
+      const after = this.candles.count(symbol)
+      if (this.chartAsset === symbol) {
+        if (after !== before || before === 0) this.emitCandles(symbol, 400)
+        else this.broadcast('candle:forming', { asset: symbol, candle: this.candles.formingCandle(symbol) ?? null })
+      }
+    })
+    this.deriv.on('tick', (symbol: string, price: number) => {
+      const info = this.assets.get(symbol)
+      if (info) info.price = price
+      this.throttledPriceEmit(symbol, price)
+    })
+    this.deriv.on('buyOk', (localId: string, contract: { contractId: number; buyPrice: number; payout: number }) => {
+      const trade = this.trades.find(t => t.id === localId)
+      if (!trade) return
+      trade.requestId = String(contract.contractId)
+      const realPayout = contract.payout > 0 && contract.buyPrice > 0
+        ? Math.round(((contract.payout - contract.buyPrice) / contract.buyPrice) * 100)
+        : trade.payout
+      if (realPayout > 0) trade.payout = Math.min(200, realPayout)
+      this.log(`✅ Deriv contract confirmed: #${contract.contractId} · ${trade.asset} ${trade.direction.toUpperCase()} · payout ${trade.payout}%`)
+      this.broadcast('trade:opened', trade)
+    })
+    this.deriv.on('buyFail', (localId: string, reason: string) => {
+      const idx = this.trades.findIndex(t => t.id === localId && t.status === 'open')
+      if (idx >= 0) {
+        const trade = this.trades[idx]
+        this.trades.splice(idx, 1)
+        this.log(`❌ Deriv buy failed (${trade.asset}): ${reason.slice(0, 160)}`)
+        this.broadcast('trade:failed', { id: localId, reason })
+        this.broadcast('trades:list', this.trades.slice(-100))
+      }
+    })
+    this.deriv.on('contract', (state) => this.onDerivContract(state))
+    this.deriv.on('closed', (reason: string) => {
+      if (this.mode !== 'deriv' || this.deriv.connected) return
+      this.log(`Deriv connection lost (${reason}) — reconnecting…`)
+      if (this.botRunning) this.stopBot('Deriv connection lost')
+      this.broadcast('state', this.snapshot())
+    })
+  }
+
+  /** connectDeriv — switch to Deriv live-market mode.
+   *  token optional: without one → free live data + paper trading;
+   *  with token → real demo/real trading on the user's Deriv account. */
+  connectDeriv(token?: string) {
+    this.po.close('switching to deriv')
+    this.sim.stop()
+    this.stopDerivLoops()
+    this.candles = new CandleManager(MAX_CANDLES)
+    this.wireCandleClose()
+    this.mode = 'deriv'
+    this.derivAuthorized = false
+    this.derivToken = token?.trim() || null
+    this.derivSymbolsOk = 0
+    this.trades = this.trades.filter(t => t.status !== 'open')
+    this.initDerivAssets()
+    // default selection: always-open symbols on weekends, majors on weekdays
+    const prefer = isFxWeekendNow()
+      ? ['R_100', 'R_75', 'R_50', '1HZ100V', 'cryBTCUSD', 'JD100']
+      : ['frxEURUSD', 'frxGBPUSD', 'frxUSDJPY', 'R_100', 'cryBTCUSD', 'frxXAUUSD']
+    this.chartAsset = prefer[0]
+    this.config.selectedAssets = [...prefer]
+    this.log(`🌍 Deriv live market mode — ${DERIV_CATALOG.length} symbols (forex · crypto · synthetics 24/7 · commodities · indices)${token ? ' · API token attached' : ' · paper trading (no token)'}`)
+    ;(this.config as any).derivToken = token ?? ''
+    ;(this.config as any).lastPlatform = 'deriv'
+    this.deriv.connect(token)
+    // chart symbol gets priority: its deep-history request queues ahead of the
+    // 62 symbol probes, so the chart renders immediately after connect
+    this.deriv.watch(this.chartAsset, true)
+    this.saveConfig()
+    this.broadcast('state', this.snapshot())
+    this.broadcast('balance', this.balanceSnapshot())
+    this.startDerivLoops()
+  }
+
+  private wireCandleClose() {
+    this.candles.onClose = (asset, candle) => {
+      if (asset === this.chartAsset) this.broadcast('candle:closed', { asset, candle })
+    }
+  }
+
+  private startDerivLoops() {
+    this.stopDerivLoops()
+    // top movers over the whole catalog (round-robin snapshot polling)
+    this.derivMoversTimer = setInterval(() => {
+      if (this.mode !== 'deriv' || !this.deriv.connected) return
+      const available = DERIV_CATALOG.filter(d => this.deriv.isSymbolOk(d.symbol) && marketOpenNow(d))
+      if (!available.length) return
+      for (let i = 0; i < DERIV_MOVERS_BATCH; i++) {
+        const def = available[this.derivMoversCursor % available.length]
+        this.derivMoversCursor++
+        if (def && this.candles.count(def.symbol) < 20) {
+          this.deriv.pollSymbol(def.symbol).catch(() => {})
+        }
+      }
+      this.computeMovers()
+    }, 15000)
+    // open contract settlement polling (authorized trading)
+    this.derivContractTimer = setInterval(() => this.pollDerivContracts(), 3000)
+    // balance refresh (authorized mode)
+    this.derivBalanceTimer = setInterval(() => {
+      if (this.mode === 'deriv' && this.deriv.authorized) this.deriv.refreshBalance().catch(() => {})
+    }, 20000)
+    // market status refresh (weekend transitions)
+    this.derivBalanceTimer2 = setInterval(() => this.refreshDerivMarketStatus(), 60000)
+  }
+
+  private derivBalanceTimer2: ReturnType<typeof setInterval> | null = null
+
+  private stopDerivLoops() {
+    if (this.derivMoversTimer) { clearInterval(this.derivMoversTimer); this.derivMoversTimer = null }
+    if (this.derivContractTimer) { clearInterval(this.derivContractTimer); this.derivContractTimer = null }
+    if (this.derivBalanceTimer) { clearInterval(this.derivBalanceTimer); this.derivBalanceTimer = null }
+    if (this.derivBalanceTimer2) { clearInterval(this.derivBalanceTimer2); this.derivBalanceTimer2 = null }
+  }
+
+  private onDerivContract(state: {
+    contractId: number; isSold: boolean; status?: string; profit: number
+    payout: number; buyPrice: number; entrySpot?: number; exitTick?: number
+  }) {
+    const trade = this.trades.find(t => t.requestId === String(state.contractId))
+    if (!trade || trade.status !== 'open') return
+    if (!state.isSold) return
+    // settle with REAL Deriv contract outcome
+    trade.status = state.profit > 0 ? 'win' : state.profit < 0 ? 'loss' : 'draw'
+    trade.profit = Math.round(state.profit * 100) / 100
+    trade.closePrice = state.exitTick ?? state.entrySpot ?? trade.openPrice
+    this.settleDerivTrade(trade)
+  }
+
+  private async pollDerivContracts() {
+    if (this.mode !== 'deriv' || !this.deriv.authorized) return
+    const open = this.trades.filter(t => t.status === 'open' && /^\d+$/.test(t.requestId))
+    for (const trade of open) {
+      const state = await this.deriv.pollContract(parseInt(trade.requestId, 10))
+      if (state) this.onDerivContract(state)
+    }
+  }
+
+  private settleDerivTrade(trade: TradeRecord) {
+    trade.closeTime = Date.now()
+    if (trade.source === 'bot') {
+      this.botStats.trades++
+      this.botStats.wins += trade.status === 'win' ? 1 : 0
+      this.botStats.losses += trade.status === 'loss' ? 1 : 0
+      this.botStats.draws += trade.status === 'draw' ? 1 : 0
+      this.botStats.profit = Math.round((this.botStats.profit + trade.profit) * 100) / 100
+      this.adaptiveDirty = true
+      if (this.config.martingale) {
+        const step = this.mgSteps.get(trade.asset) ?? 0
+        this.mgSteps.set(trade.asset, trade.status === 'loss' ? step + 1 : 0)
+      }
+      if (trade.status === 'loss') {
+        const c = (this.consecLosses.get(trade.asset) ?? 0) + 1
+        this.consecLosses.set(trade.asset, c)
+        if (c >= COOLDOWN_LOSSES) {
+          this.cooldownUntil.set(trade.asset, Date.now() + COOLDOWN_MS)
+          this.consecLosses.set(trade.asset, 0)
+          this.log(`⏸ ${trade.asset} lost ${c} in a row — cooling down ${COOLDOWN_MS / 60000}min`)
+        }
+      } else if (trade.status === 'win') {
+        this.consecLosses.set(trade.asset, 0)
+      }
+    }
+    this.broadcast('trade:settled', trade)
+    this.tg.notifyTradeSettled(trade)
+    const emoji = trade.status === 'win' ? '🟢' : trade.status === 'loss' ? '🔴' : '⚪'
+    this.log(`${emoji} Deriv #${trade.requestId} ${trade.asset} ${trade.direction.toUpperCase()} ${trade.status.toUpperCase()} ${trade.profit >= 0 ? '+' : ''}${trade.profit}$`)
+    this.postToNext('/trades/settle', {
+      id: trade.id, status: trade.status, profit: trade.profit,
+      closePrice: trade.closePrice, closeTime: new Date(trade.closeTime).toISOString(),
+    }).catch(() => {})
+    if (this.botRunning) {
+      if (this.botStats.profit <= -Math.abs(this.config.stopLoss)) {
+        this.stopBot(`Stop-loss hit (${this.botStats.profit}$)`)
+      } else if (this.botStats.profit >= Math.abs(this.config.takeProfit)) {
+        this.stopBot(`Take-profit reached (+${this.botStats.profit}$)`)
+      } else if (this.botStats.trades >= this.config.maxTrades) {
+        this.stopBot('Max trades reached')
+      }
+    }
+  }
+
+  disconnectDeriv() {
+    this.deriv.disconnect()
+    this.stopDerivLoops()
+  }
+
   startSimulation() {
     if (this.mode === 'simulation') return
     this.po.close('switching to simulation')
+    this.disconnectDeriv()
     this.mode = 'simulation'
     this.accountType = this.config.demoMode ? 'demo' : 'real'
+    this.candles = new CandleManager(MAX_CANDLES)
+    this.wireCandleClose()
+    this.initAssets()
+    this.normalizeSelectionForMode()
+    if (this.chartAsset.startsWith('frx') || this.chartAsset.startsWith('cry') || this.chartAsset.startsWith('R_') || this.chartAsset.startsWith('1HZ') || this.chartAsset.startsWith('JD') || this.chartAsset.startsWith('BOOM') || this.chartAsset.startsWith('CRASH') || this.chartAsset.startsWith('stp') || this.chartAsset.startsWith('OTC_')) {
+      this.chartAsset = 'EURUSD_otc'
+    }
     this.sim.start()
     // seed history for all assets
     for (const a of this.assets.keys()) {
@@ -237,9 +535,9 @@ class TradingEngine {
 
   /** Reset simulated account balances to the $10,000 demo / $1,000 real defaults. */
   resetSimBalance() {
-    if (this.mode !== 'simulation') return
+    if (this.mode !== 'simulation' && !(this.mode === 'deriv' && !this.derivAuthorized)) return
     this.simBalance = { demo: 10000, real: 1000 }
-    this.log('Simulation balance reset — demo $10,000 / real $1,000')
+    this.log('Paper balance reset — demo $10,000 / real $1,000')
     this.broadcast('balance', this.balanceSnapshot())
     this.broadcast('stats', this.statsSnapshot())
   }
@@ -247,16 +545,33 @@ class TradingEngine {
   // ─── Connection control ─────────────────────────────────────────────────
   connectLive(ssid: string, region: string) {
     this.sim.stop()
+    this.disconnectDeriv()
+    this.candles = new CandleManager(MAX_CANDLES)
+    this.wireCandleClose()
+    this.initAssets()
+    this.normalizeSelectionForMode()
+    if (!this.assets.has(this.chartAsset)) this.chartAsset = 'EURUSD_otc'
     this.config.ssid = ssid
     this.config.serverRegion = region
+    ;(this.config as any).lastPlatform = 'po'
+    ;(this.config as any).derivToken = null
     this.po.connect(ssid, region)
     this.broadcast('state', this.snapshot())
     this.saveConfig()
   }
 
+  /** Reset the scan selection when it references symbols from another platform. */
+  private normalizeSelectionForMode() {
+    const valid = this.config.selectedAssets.filter(a => this.assets.has(a))
+    if (valid.length !== this.config.selectedAssets.length) {
+      this.config.selectedAssets = valid.length >= 1 ? valid : DEFAULT_CONFIG.selectedAssets
+    }
+  }
+
   disconnect() {
     this.po.close('user disconnect')
     this.sim.stop()
+    this.disconnectDeriv()
     this.mode = 'disconnected'
     if (this.botRunning) this.stopBot('Disconnected')
     this.log('Disconnected')
@@ -264,6 +579,21 @@ class TradingEngine {
   }
 
   setAccount(account: 'demo' | 'real') {
+    if (this.mode === 'deriv') {
+      if (!this.derivAuthorized) {
+        this.log('Deriv paper mode: connect an API token to switch between demo/real accounts')
+        this.broadcast('balance', this.balanceSnapshot())
+        return
+      }
+      // Deriv: the token is bound to ONE account — switching is informational
+      const virtual = !!this.deriv.account?.isVirtual
+      const requested = account === 'demo'
+      if (virtual !== requested) {
+        this.log(`This Deriv API token belongs to a ${virtual ? 'DEMO (virtual)' : 'REAL'} account — paste the other account's token to switch`)
+        this.broadcast('balance', this.balanceSnapshot())
+        return
+      }
+    }
     this.accountType = account
     this.config.demoMode = account === 'demo'
     if (this.mode === 'live') this.po.changeBalance(account)
@@ -276,6 +606,7 @@ class TradingEngine {
   // ─── Chart subscription ────────────────────────────────────────────────
   setChartAsset(asset: string) {
     if (!this.assets.has(asset)) return
+    const prev = this.chartAsset
     this.chartAsset = asset
     if (this.mode === 'live') {
       this.po.changeSymbol(asset, 60)
@@ -284,6 +615,11 @@ class TradingEngine {
       if (this.candles.count(asset) < SCAN_CANDLES) {
         this.candles.seed(asset, this.sim.history(asset, MAX_CANDLES))
       }
+    } else if (this.mode === 'deriv') {
+      if (prev && prev !== asset) this.deriv.unwatch(prev)
+      this.deriv.watch(asset, true) // deep history (1500 candles)
+      // when the chart symbol has no history yet, emit what we have now
+      this.emitCandles(asset, 400)
     }
     this.emitCandles(asset, 400)
   }
@@ -343,6 +679,17 @@ class TradingEngine {
 
   // ─── Balance ────────────────────────────────────────────────────────────
   balanceSnapshot() {
+    if (this.mode === 'deriv') {
+      // authorized → real Deriv balance; paper → sim balances against real data
+      const balance = this.derivAuthorized
+        ? (this.balances[this.accountType] ?? this.deriv.account?.balance ?? 0)
+        : this.simBalance[this.accountType]
+      return {
+        balance, accountType: this.accountType, mode: this.mode,
+        demoBalance: this.derivAuthorized ? (this.accountType === 'demo' ? balance : null) : this.simBalance.demo,
+        realBalance: this.derivAuthorized ? (this.accountType === 'real' ? balance : null) : this.simBalance.real,
+      }
+    }
     const balance = this.mode === 'simulation'
       ? this.simBalance[this.accountType]
       : this.balances[this.accountType] ?? 0
@@ -354,9 +701,10 @@ class TradingEngine {
   }
 
   adjustSimBalance(delta: number) {
-    if (this.mode !== 'simulation') return
-    this.simBalance[this.accountType] = Math.max(0, this.simBalance[this.accountType] + delta)
-    this.broadcast('balance', this.balanceSnapshot())
+    if (this.mode === 'simulation' || (this.mode === 'deriv' && !this.derivAuthorized)) {
+      this.simBalance[this.accountType] = Math.max(0, this.simBalance[this.accountType] + delta)
+      this.broadcast('balance', this.balanceSnapshot())
+    }
   }
 
   currentBalance(): number {
@@ -463,9 +811,15 @@ class TradingEngine {
   }
 
   scanAsset(asset: string): Signal | null {
+    // deriv: never scan a closed market (stale candles = garbage signals)
+    if (this.mode === 'deriv') {
+      const info = this.assets.get(asset)
+      if (!info?.open) return null
+    }
     const window = this.candles.analysisWindow(asset)
     if (window.length < 120) {
       if (this.mode === 'live') this.backfill(asset, SCAN_CANDLES)
+      if (this.mode === 'deriv') this.deriv.watch(asset, true)
       return null
     }
     const bias = this.newsBiasForAsset(asset)
@@ -632,12 +986,18 @@ class TradingEngine {
       this.pendingSignals = []
       return
     }
-    // freshen data in live mode
+    // freshen data in live mode (deriv polls continuously — nothing to do)
     if (this.mode === 'live') {
       for (const a of this.config.selectedAssets) {
         const nowTs = Math.floor(Date.now() / 1000)
         if (this.candles.count(a) < SCAN_CANDLES) this.backfill(a, SCAN_CANDLES)
         else this.po.loadHistory(a, nowTs, 300, 60)
+      }
+    }
+    if (this.mode === 'deriv') {
+      // make sure every scan asset is watched (chart + selection)
+      for (const a of this.config.selectedAssets) {
+        if (!this.deriv.watchedSymbols.includes(a)) this.deriv.watch(a, this.candles.count(a) < SCAN_CANDLES)
       }
     }
     const newsBlock = this.config.newsFilter && this.highImpactNews
@@ -775,7 +1135,14 @@ class TradingEngine {
       status: 'open', confidence, isDemo: trade.isDemo, requestId: trade.requestId, source,
     }).catch(() => {})
 
-    if (this.mode === 'live') {
+    if (this.mode === 'deriv') {
+      if (this.derivAuthorized) {
+        this.log(`📤 ${source === 'bot' ? 'BOT' : 'MANUAL'} ${direction.toUpperCase()} ${asset} $${amount} ${expirySeconds}s @ ${price} → Deriv contract`)
+        this.deriv.buyContract({ localId: trade.id, symbol: asset, direction, amount, expirySeconds })
+      } else {
+        this.log(`📤 ${source === 'bot' ? 'BOT' : 'MANUAL'} PAPER ${direction.toUpperCase()} ${asset} $${amount} ${expirySeconds}s @ ${price} (live data, simulated funds)`)
+      }
+    } else if (this.mode === 'live') {
       this.po.openOrder({
         asset, amount, action: direction,
         isDemo: this.accountType === 'demo',
@@ -809,6 +1176,12 @@ class TradingEngine {
     const now = Date.now()
     for (const trade of this.trades) {
       if (trade.status !== 'open') continue
+      // Deriv contracts with a real contract id settle via proposal_open_contract
+      // polling (server-side result) — skip time-based settlement for them
+      if (this.mode === 'deriv' && this.derivAuthorized && /^\d+$/.test(trade.requestId)) {
+        // safety: if the contract poll never settles it, fall back after +90s
+        if (now - (trade.openTime + trade.expirySeconds * 1000 + 1500) < 90000) continue
+      }
       const due = trade.openTime + trade.expirySeconds * 1000 + 1500
       if (now < due) continue
       const settleTs = Math.floor((trade.openTime + trade.expirySeconds * 1000) / 1000)
@@ -855,7 +1228,7 @@ class TradingEngine {
       ? Math.round(trade.amount * trade.payout / 100 * 100) / 100
       : trade.status === 'loss' ? -trade.amount : 0
 
-    if (this.mode === 'simulation') {
+    if (this.mode === 'simulation' || (this.mode === 'deriv' && !this.derivAuthorized)) {
       // stake was not deducted upfront; net effect: -amount on loss, +payout on win
       this.adjustSimBalance(trade.status === 'win' ? trade.profit : trade.status === 'loss' ? -trade.amount : 0)
     }
@@ -1029,8 +1402,12 @@ class TradingEngine {
         this.recomputeAdaptive('boot')
       }
     } catch { /* ignore */ }
-    // auto-reconnect with stored SSID
-    if (this.config.ssid) {
+    // auto-reconnect: deriv (token or paper mode) takes priority over PO SSID
+    const derivToken = (this.config as any).derivToken
+    if (typeof derivToken === 'string' && derivToken.length >= 0 && (derivToken || (this.config as any).lastPlatform === 'deriv')) {
+      this.log(derivToken ? 'Found stored Deriv token — reconnecting…' : 'Restoring Deriv live-market mode (paper)…')
+      this.connectDeriv(derivToken || undefined)
+    } else if (this.config.ssid) {
       this.log('Found stored SSID — reconnecting to Pocket Option…')
       this.connectLive(this.config.ssid, this.config.serverRegion)
     }
@@ -1100,20 +1477,34 @@ class TradingEngine {
   snapshot(): ServiceStatus & { config: BotConfig; stats: unknown; adaptive: unknown[]; calendar: CalendarSnapshot | null; telegram: unknown } {
     return {
       mode: this.mode,
-      authenticated: this.mode === 'live' ? this.po.isAuthenticated : this.mode === 'simulation',
+      authenticated: this.mode === 'live'
+        ? this.po.isAuthenticated
+        : this.mode === 'simulation' || this.mode === 'deriv',
       accountType: this.accountType,
       balance: this.balanceSnapshot().balance ?? 0,
-      currency: 'USD',
+      currency: this.mode === 'deriv' ? (this.deriv.account?.currency ?? 'USD') : 'USD',
       botRunning: this.botRunning,
       connectedAt: null,
       serverRegion: this.config.serverRegion,
       newsBias: this.newsBias,
       newsUpdatedAt: this.newsUpdatedAt,
+      deriv: this.mode === 'deriv' ? {
+        connected: this.deriv.connected,
+        authorized: this.derivAuthorized,
+        streaming: this.deriv.streaming,
+        loginid: this.deriv.account?.loginid ?? null,
+        isVirtual: !!this.deriv.account?.isVirtual,
+        currency: this.deriv.account?.currency ?? 'USD',
+        appId: process.env.DERIV_APP_ID ?? '1089',
+        symbolsAvailable: this.derivSymbolsOk,
+        symbolsTotal: DERIV_CATALOG.length,
+      } : undefined,
       config: this.config,
       stats: this.statsSnapshot(),
       adaptive: this.adaptiveList(),
       calendar: this.calendar ?? calendarSnapshot(),
       telegram: this.tg.info(),
+      chartAsset: this.chartAsset,
     }
   }
 }
@@ -1184,13 +1575,29 @@ export function bootEngine(path = '/'): EngineBoot {
       ack?.({ ok: true })
     })
 
+    socket.on('connect:deriv', (data: { token?: string } | null, ack?: (r: unknown) => void) => {
+      const token = String((data as any)?.token ?? '').trim()
+      engine.connectDeriv(token || undefined)
+      ack?.({ ok: true })
+    })
+
+    socket.on('deriv:reauth', (data: { token?: string }, ack?: (r: unknown) => void) => {
+      const token = String(data?.token ?? '').trim()
+      if (!token) { ack?.({ ok: false, error: 'token required' }); return }
+      engine.derivToken = token
+      ;(engine.config as any).derivToken = token
+      engine.saveConfig()
+      engine.deriv.connect(token)
+      ack?.({ ok: true })
+    })
+
     socket.on('sim:start', (_data: unknown, ack?: (r: unknown) => void) => {
       engine.startSimulation()
       ack?.({ ok: true })
     })
 
     socket.on('sim:reset', (_data: unknown, ack?: (r: unknown) => void) => {
-      if (engine.mode !== 'simulation') {
+      if (engine.mode !== 'simulation' && !(engine.mode === 'deriv' && !engine.derivAuthorized)) {
         ack?.({ ok: false, error: 'Not in simulation mode' })
         return
       }
@@ -1243,7 +1650,15 @@ export function bootEngine(path = '/'): EngineBoot {
       if (typeof d.dailyStopLoss === 'number' || typeof d.dailyProfitTarget === 'number') {
         engine.dayLimitHit = null
       }
-      if (Array.isArray(d.selectedAssets)) c.selectedAssets = (d.selectedAssets as string[]).filter(a => typeof a === 'string').slice(0, 25)
+      if (Array.isArray(d.selectedAssets)) {
+        c.selectedAssets = (d.selectedAssets as string[]).filter(a => typeof a === 'string').slice(0, 25)
+        // deriv: keep the watch list in sync with the scan selection
+        if (engine.mode === 'deriv') {
+          for (const a of c.selectedAssets) {
+            if (!engine.deriv.watchedSymbols.includes(a)) engine.deriv.watch(a, engine.candles.count(a) < SCAN_CANDLES)
+          }
+        }
+      }
       if (typeof d.demoMode === 'boolean' && d.demoMode !== (engine.accountType === 'demo')) {
         engine.setAccount(d.demoMode ? 'demo' : 'real')
       }
@@ -1273,7 +1688,7 @@ export function bootEngine(path = '/'): EngineBoot {
     })
 
     // ── backtest ──
-    socket.on('backtest:run', (data: { asset?: string; minConfidence?: number; expirySeconds?: number; count?: number }, ack?: (r: unknown) => void) => {
+    socket.on('backtest:run', async (data: { asset?: string; minConfidence?: number; expirySeconds?: number; count?: number }, ack?: (r: unknown) => void) => {
       const asset = data?.asset ?? engine.chartAsset
       const minConfidence = data?.minConfidence ?? engine.config.minConfidence
       const expirySeconds = data?.expirySeconds ?? engine.config.expirySeconds
@@ -1284,6 +1699,15 @@ export function bootEngine(path = '/'): EngineBoot {
           candles = engine.candles.closedCandles(asset)
         } else if (engine.mode === 'live') {
           engine.backfill(asset, MAX_CANDLES)
+        } else if (engine.mode === 'deriv') {
+          // fetch real history straight from Deriv (up to 2000 candles)
+          try {
+            const hist = await engine.deriv.snapshotCandles(asset, 2000)
+            if (hist.length) {
+              engine.candles.mergeCandles(asset, hist)
+              candles = engine.candles.closedCandles(asset)
+            }
+          } catch { /* fall through */ }
         }
       }
       if (candles.length < 300) {
@@ -1348,6 +1772,27 @@ export function bootEngine(path = '/'): EngineBoot {
       const closed = engine.candles.closedCandles(asset)
       const forming = engine.candles.formingCandle(asset)
       ack?.({ asset, candles: closed.slice(-(data?.count ?? 400)), forming: forming ?? null, total: closed.length })
+    })
+
+    // deep candle fetch for backtests — deriv mode can pull up to 2000 real
+    // candles straight from the Deriv API on demand
+    socket.on('candles:fetch', async (data: { asset?: string; count?: number }, ack?: (r: unknown) => void) => {
+      const asset = data?.asset ?? engine.chartAsset
+      const count = Math.max(100, Math.min(2000, data?.count ?? 1500))
+      let closed = engine.candles.closedCandles(asset)
+      if (engine.mode === 'deriv' && closed.length < count) {
+        try {
+          const hist = await engine.deriv.snapshotCandles(asset, count)
+          if (hist.length) {
+            engine.candles.mergeCandles(asset, hist)
+            closed = engine.candles.closedCandles(asset)
+          }
+        } catch { /* return what we have */ }
+      } else if (engine.mode === 'simulation' && closed.length < count) {
+        engine.candles.seed(asset, engine.sim.history(asset, Math.min(2000, count)))
+        closed = engine.candles.closedCandles(asset)
+      }
+      ack?.({ ok: closed.length >= 100, asset, candles: closed.slice(-count), total: closed.length, error: closed.length < 100 ? `Only ${closed.length} candles available for ${asset} — select it in Market Watch or try the chart asset` : null })
     })
   })
 
@@ -1424,8 +1869,15 @@ if (import.meta.main) {
       console.log(`PO Trader service listening on port ${PORT} [${CODE_VERSION}]`)
     })
 
-    process.on('SIGTERM', () => { httpServer.close(() => process.exit(0)) })
-    process.on('SIGINT', () => { httpServer.close(() => process.exit(0)) })
+    // force-exit after a short grace period — httpServer.close() alone hangs
+    // forever while socket.io clients keep open connections (leaves the port
+    // unbound but the process alive, deadlocking the supervisor)
+    const shutdown = () => {
+      httpServer.close(() => process.exit(0))
+      setTimeout(() => process.exit(0), 2500).unref()
+    }
+    process.on('SIGTERM', shutdown)
+    process.on('SIGINT', shutdown)
   }
 }
 

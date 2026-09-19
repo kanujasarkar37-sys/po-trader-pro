@@ -11,11 +11,14 @@ export interface Candle {
 export interface AssetInfo {
   asset: string
   name: string
-  category: 'otc' | 'forex' | 'crypto' | 'commodity' | 'stock' | 'index'
+  category: 'otc' | 'forex' | 'crypto' | 'commodity' | 'stock' | 'index' | 'synthetic'
   payout: number // percent, e.g. 92
   open: boolean
   price?: number
   changePct?: number
+  digits?: number
+  /** why a market is closed (weekend etc.) — shown in the UI */
+  closedReason?: string
 }
 
 export interface SignalComponents {
@@ -72,6 +75,7 @@ export interface TradeRecord {
 
 export interface BotConfig {
   ssid: string | null
+  derivToken?: string | null
   serverRegion: string
   demoMode: boolean
   autoTrade: boolean
@@ -126,7 +130,7 @@ export interface AdaptiveInfo {
 }
 
 export interface ServiceStatus {
-  mode: 'disconnected' | 'live' | 'simulation'
+  mode: 'disconnected' | 'live' | 'simulation' | 'deriv'
   authenticated: boolean
   accountType: 'demo' | 'real'
   balance: number
@@ -136,4 +140,16 @@ export interface ServiceStatus {
   serverRegion: string
   newsBias: Record<string, number> | null
   newsUpdatedAt: number | null
+  /** Deriv mode details (null when not in deriv mode) */
+  deriv?: {
+    connected: boolean
+    authorized: boolean
+    streaming: boolean
+    loginid: string | null
+    isVirtual: boolean
+    currency: string
+    appId: string
+    symbolsAvailable: number
+    symbolsTotal: number
+  }
 }

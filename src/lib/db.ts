@@ -7,12 +7,14 @@ const globalForPrisma = globalThis as unknown as {
   prisma?: PrismaClient
   prismaV2?: PrismaClient
   prismaV3?: PrismaClient
+  prismaV4?: PrismaClient
+  prismaV5?: PrismaClient
 }
 
 export const db =
-  globalForPrisma.prismaV3 ??
+  globalForPrisma.prismaV5 ??
   new PrismaClient({
     log: ['query'],
   })
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prismaV3 = db
+if (process.env.NODE_ENV !== 'production') globalForPrisma.prismaV5 = db

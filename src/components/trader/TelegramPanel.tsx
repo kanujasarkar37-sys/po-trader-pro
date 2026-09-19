@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-export function TelegramPanel() {
+export function TelegramPanel({ inDialog = false }: { inDialog?: boolean }) {
   const { telegram, saveTelegram, testTelegram, socketConnected } = useTrader()
   const status = telegram.status
   const cfg = telegram.config
@@ -69,7 +69,10 @@ export function TelegramPanel() {
   const enabled = cfg?.enabled ?? false
 
   return (
-    <div className="flex flex-col overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/80">
+    <div className={cn(
+      'flex flex-col overflow-hidden rounded-xl bg-zinc-950/80',
+      inDialog ? 'h-[440px] border-0' : 'border border-zinc-800'
+    )}>
       <div className="flex items-center justify-between gap-2 border-b border-zinc-800/80 px-3 py-2">
         <h2 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-zinc-400">
           <Send className="h-3.5 w-3.5 text-emerald-500" />

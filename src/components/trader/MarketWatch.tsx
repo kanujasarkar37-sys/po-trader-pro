@@ -7,12 +7,12 @@ import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useTrader } from './store'
-import { TrendingUp, TrendingDown, Radar, Search } from 'lucide-react'
+import { TrendingUp, TrendingDown, Radar, Search, MoonStar } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const CATEGORY_LABEL: Record<string, string> = {
   all: 'All', otc: 'OTC Pairs', forex: 'Forex', crypto: 'Crypto',
-  commodity: 'Commodities', stock: 'Stocks', index: 'Indices',
+  commodity: 'Commodities', stock: 'Stocks', index: 'Indices', synthetic: 'Synthetics',
 }
 
 // ─── rolling price history for sparklines (module-level: survives re-renders) ───
@@ -68,9 +68,16 @@ function Sparkline({ asset, className }: { asset: string; className?: string }) 
 }
 
 export function MarketWatch() {
-  const { assets, prices, chartAsset, setChartAsset, config, updateConfig, signals } = useTrader()
+  const { assets, prices, chartAsset, setChartAsset, config, updateConfig, signals, mode } = useTrader()
   const [category, setCategory] = useState('otc')
   const [query, setQuery] = useState('')
+
+  // deriv mode defaults to the synthetic tab (24/7 markets)
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (mode === 'deriv' && category === 'otc') setCategory('synthetic')
+    if (mode !== 'deriv' && category === 'synthetic') setCategory('otc')
+  }, [mode])
 
   const selected = config?.selectedAssets ?? []
 
@@ -91,8 +98,19 @@ export function MarketWatch() {
       const q = query.trim().toLowerCase()
       list = list.filter(a => a.asset.toLowerCase().includes(q) || a.name.toLowerCase().includes(q))
     }
-    return list
+    // open markets first, then by name
+    return [...list].sort((a, b) => (b.open ? 1 : 0) - (a.open ? 1 : 0))
   }, [assets, category, query])
+
+  const closedCount = useMemo(() => filtered.filter(a => !a.open).length, [filtered])
+  const weekendNote = useMemo(() => {
+    if (mode !== 'deriv') return null
+    const fx = assets.filter(a => (a.category === 'forex' || a.category === 'commodity' || a.category === 'index') && !a.open).length
+    if (fx > 0 && assets.some(a => a.category === 'forex')) {
+      return `Forex/commodities closed — weekend. Synthetics & crypto still trade 24/7.`
+    }
+    return null
+  }, [assets, mode])
 
   // last price direction per asset (compare against previous tick)
   const priceMap = prices
@@ -123,6 +141,13 @@ export function MarketWatch() {
           {selected.length} scanning
         </Badge>
       </div>
+
+      {weekendNote && (
+        <div className="flex items-center gap-2 border-b border-amber-900/40 bg-amber-950/20 px-3 py-1.5" role="status">
+          <MoonStar className="h-3 w-3 shrink-0 text-amber-400" />
+          <p className="text-[10px] font-medium leading-tight text-amber-300/90">{weekendNote}</p>
+        </div>
+      )}
 
       <div className="space-y-2 border-b border-zinc-800/80 px-3 py-2">
         <div className="relative">
@@ -190,8 +215,15 @@ export function MarketWatch() {
 
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
-                    <span className="truncate text-xs font-semibold text-zinc-200">{a.asset}</span>
-                    {!a.open && <span className="text-[9px] font-bold text-red-500">CLOSED</span>}
+                    <span className={cn('truncate text-xs font-semibold', a.open ? 'text-zinc-200' : 'text-zinc-500')}>{a.asset}</span>
+                    {!a.open && (
+                      <span
+                        className="rounded-sm bg-zinc-800 px-1 py-px text-[8px] font-black tracking-wide text-zinc-500"
+                        title={a.closedReason ?? 'Market closed'}
+                      >
+                        CLOSED
+                      </span>
+                    )}
                   </div>
                   <span className="text-[10px] text-zinc-500">{a.name}</span>
                 </div>
@@ -199,8 +231,8 @@ export function MarketWatch() {
                 <Sparkline asset={a.asset} className="hidden sm:block" />
 
                 <div className="flex flex-col items-end">
-                  <span className="font-mono text-xs font-medium tabular-nums text-zinc-100">
-                    {formatPrice(price, a.asset)}
+                  <span className={cn('font-mono text-xs font-medium tabular-nums', a.open ? 'text-zinc-100' : 'text-zinc-500')}>
+                    {formatPrice(price, a.asset, a.digits)}
                   </span>
                   <span className={cn(
                     'text-[9px] font-bold tabular-nums',
@@ -231,15 +263,16 @@ export function MarketWatch() {
           className="h-6 w-full border-zinc-800 bg-zinc-900 text-[10px] font-semibold text-zinc-400 hover:border-emerald-800 hover:text-emerald-300"
           onClick={() => updateConfig({ selectedAssets: filtered.filter(a => a.open).slice(0, 25).map(a => a.asset) })}
         >
-          Scan all {filtered.length} in view
+          Scan all {filtered.filter(a => a.open).length} open in view{closedCount > 0 ? ` · ${closedCount} closed` : ''}
         </Button>
       </div>
     </div>
   )
 }
 
-function formatPrice(price: number, asset: string): string {
+function formatPrice(price: number, asset: string, digits?: number): string {
   if (!price || !isFinite(price)) return '—'
+  if (digits && digits >= 1 && digits <= 6) return price.toFixed(digits)
   if (price >= 1000) return price.toFixed(1)
   if (price >= 100) return price.toFixed(2)
   if (price >= 2) return price.toFixed(3)

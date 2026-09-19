@@ -47,17 +47,41 @@ export class CandleManager {
       low: d[4],
       close: d[2],
     }))
+    this.mergeCandles(asset, incoming)
+  }
+
+  /** Merge Deriv-format candles ({time,open,high,low,close}) — handles both
+   *  history snapshots (many candles) and poll updates (2-3 newest candles:
+   *  last closed + currently forming). Keeps the forming candle in sync. */
+  mergeCandles(asset: string, incoming: Candle[]) {
     if (!incoming.length) return
     const list = this.closed.get(asset) ?? []
     const byTime = new Map<number, Candle>()
     for (const c of list) byTime.set(c.time, c)
-    for (const c of incoming) byTime.set(c.time, c)
+    const sorted = [...incoming].sort((a, b) => a.time - b.time)
+    // the newest candle in a Deriv poll snapshot is the FORMING candle
+    const formingTime = sorted[sorted.length - 1].time
+    for (const c of sorted) {
+      if (c.time >= formingTime) continue // forming handled below
+      byTime.set(c.time, c)
+    }
     const merged = Array.from(byTime.values()).sort((a, b) => a.time - b.time)
     this.closed.set(asset, merged.slice(-this.maxCount))
-    // drop closed candles that are in the past vs forming
+    // sync forming candle with the newest snapshot candle
+    const snap = sorted[sorted.length - 1]
     const f = this.forming.get(asset)
-    if (f) {
-      this.closed.set(asset, (this.closed.get(asset) ?? []).filter(c => c.time < f.time))
+    if (!f || snap.time > f.time) {
+      // rollover: the previous forming candle is now complete
+      if (f && snap.time > f.time) this.pushClosed(asset, f)
+      this.forming.set(asset, { ...snap })
+    } else if (snap.time === f.time) {
+      // update the forming candle in place
+      f.open = snap.open; f.high = snap.high; f.low = snap.low; f.close = snap.close
+    }
+    // drop closed candles that are in the past vs forming
+    const f2 = this.forming.get(asset)
+    if (f2) {
+      this.closed.set(asset, (this.closed.get(asset) ?? []).filter(c => c.time < f2.time))
     }
   }
 

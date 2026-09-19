@@ -18,7 +18,7 @@ import { BacktestPanel } from '@/components/trader/BacktestPanel'
 import { AnalyticsPanel } from '@/components/trader/AnalyticsPanel'
 import { ActivityLog } from '@/components/trader/ActivityLog'
 import { CandleChart } from '@/components/trader/CandleChart'
-import { TelegramPanel } from '@/components/trader/TelegramPanel'
+import { StrategyLab } from '@/components/trader/StrategyLab'
 import { Footer } from '@/components/trader/Footer'
 import { Toaster } from '@/components/ui/sonner'
 import { Badge } from '@/components/ui/badge'
@@ -53,7 +53,6 @@ export default function Home() {
     } catch { /* private mode */ }
   }
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setChartTfFromStorage()
   }, [])
 
@@ -220,7 +219,9 @@ export default function Home() {
             <div className="min-h-0 flex-1">
               <BotPanel />
             </div>
-            <TelegramPanel />
+            <div className="h-[300px] shrink-0">
+              <ActivityLog />
+            </div>
           </div>
         </div>
 
@@ -250,16 +251,16 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Backtest + AI + Activity */}
+        {/* Strategy Lab + Backtest + AI */}
         <div className="panel-in grid gap-3 lg:grid-cols-12" style={{ animationDelay: '300ms' }}>
-          <div className="h-[380px] min-w-0 lg:col-span-4">
+          <div className="h-[520px] min-w-0 lg:col-span-6">
+            <StrategyLab asset={chartAsset} />
+          </div>
+          <div className="h-[520px] min-w-0 lg:col-span-3">
             <BacktestPanel asset={chartAsset} />
           </div>
-          <div className="h-[380px] min-w-0 lg:col-span-4">
+          <div className="h-[520px] min-w-0 lg:col-span-3">
             <AIAdvisor asset={chartAsset} />
-          </div>
-          <div className="h-[380px] min-w-0 lg:col-span-4">
-            <ActivityLog />
           </div>
         </div>
 
@@ -275,7 +276,13 @@ export default function Home() {
           <span>
             Mode:{' '}
             <strong className="text-zinc-300">
-              {mode === 'live' ? 'LIVE Pocket Option' : mode === 'simulation' ? 'SIMULATION' : 'DISCONNECTED'}
+              {mode === 'deriv'
+                ? `DERIV · LIVE MARKET${useTrader.getState().deriv.authorized ? '' : ' · PAPER'}`
+                : mode === 'live'
+                  ? 'LIVE Pocket Option'
+                  : mode === 'simulation'
+                    ? 'SIMULATION'
+                    : 'DISCONNECTED'}
             </strong>
           </span>
           <span className="text-zinc-700">|</span>

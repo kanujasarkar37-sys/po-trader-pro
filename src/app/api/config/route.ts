@@ -21,7 +21,7 @@ export async function PUT(req: NextRequest) {
     const body = await req.json()
     const data: Record<string, unknown> = {}
     const fields = [
-      'ssid', 'serverRegion', 'demoMode', 'autoTrade', 'tradeAmount', 'minConfidence',
+      'ssid', 'derivToken', 'lastPlatform', 'serverRegion', 'demoMode', 'autoTrade', 'tradeAmount', 'minConfidence',
       'expirySeconds', 'maxTrades', 'maxConcurrent', 'martingale', 'mgFactor', 'mgMaxSteps',
       'stopLoss', 'takeProfit', 'selectedAssets', 'newsFilter',
       'dailyStopLoss', 'dailyProfitTarget', 'dynamicStake', 'adaptiveThresholds',

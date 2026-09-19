@@ -10,6 +10,8 @@ datasource db {
 model BotConfig {
   id             String   @id @default("main")
   ssid           String?
+  derivToken     String?
+  lastPlatform   String?   // 'deriv' | 'po' — auto-reconnect preference
   serverRegion   String   @default("api-l")
   demoMode       Boolean  @default(true)
   autoTrade      Boolean  @default(false)
@@ -61,4 +63,16 @@ model Signal {
   indicators    String   @default("{}")
   acted         Boolean  @default(false)
   createdAt     DateTime @default(now())
+}
+
+// AI Strategy Lab — user/AI generated rule strategies (rules + stats are JSON)
+model Strategy {
+  id          String   @id @default(cuid())
+  name        String
+  description String   @default("")
+  author      String   @default("user")
+  rules       String   // JSON-encoded StrategyRules
+  stats       String   @default("{}") // JSON {trades, winRate, profit, asset, testedAt}
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }

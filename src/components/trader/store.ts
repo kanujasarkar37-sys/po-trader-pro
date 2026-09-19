@@ -9,6 +9,7 @@ import { toast } from 'sonner'
 export interface Candle { time: number; open: number; high: number; low: number; close: number }
 export interface AssetInfo {
   asset: string; name: string; category: string; payout: number; open: boolean; price?: number
+  changePct?: number; digits?: number; closedReason?: string
 }
 export interface SignalComponents {
   ema: number; rsi: number; stoch: number; macd: number; bollinger: number; pattern: number; sr: number; momentum: number; mtf: number; htf: number
@@ -27,12 +28,17 @@ export interface TradeRecord {
   signal?: { components: SignalComponents; reasons: string[]; regime: 'trending' | 'ranging' }
 }
 export interface BotConfig {
-  ssid: string | null; serverRegion: string; demoMode: boolean; autoTrade: boolean
+  ssid: string | null; derivToken?: string | null; serverRegion: string; demoMode: boolean; autoTrade: boolean
   tradeAmount: number; minConfidence: number; expirySeconds: number; maxTrades: number
   maxConcurrent: number; martingale: boolean; mgFactor: number; mgMaxSteps: number
   stopLoss: number; takeProfit: number; selectedAssets: string[]; newsFilter: boolean
   dailyStopLoss: number; dailyProfitTarget: number; dynamicStake: boolean
   adaptiveThresholds: boolean
+}
+export interface DerivState {
+  connected: boolean; authorized: boolean; streaming: boolean
+  loginid: string | null; isVirtual: boolean; currency: string; appId: string
+  symbolsAvailable: number; symbolsTotal: number
 }
 export interface MoverInfo {
   asset: string; name: string; changePct: number; price: number; payout: number
@@ -72,8 +78,9 @@ export interface TelegramStatus {
 interface TraderState {
   socket: Socket | null
   socketConnected: boolean
-  mode: 'disconnected' | 'live' | 'simulation'
+  mode: 'disconnected' | 'live' | 'simulation' | 'deriv'
   authenticated: boolean
+  deriv: DerivState
   accountType: 'demo' | 'real'
   balance: number
   demoBalance: number | null
@@ -108,6 +115,7 @@ interface TraderState {
   // actions
   init: () => void
   connectLive: (ssid: string, region: string) => void
+  connectDeriv: (token?: string) => void
   startSim: () => void
   resetSim: () => void
   disconnectPo: () => void
@@ -130,12 +138,16 @@ let priceBuffer: Record<string, number> = {}
 let priceDirsBuffer: Record<string, 1 | -1> = {}
 let lastPrices: Record<string, number> = {}
 let priceFlusher: ReturnType<typeof setInterval> | null = null
+// the engine's current chart asset (from 'state' broadcasts) — used to follow
+// the engine when the platform switches (e.g. Pocket Option → Deriv universe)
+let engineChartAsset: string | null = null
 
 export const useTrader = create<TraderState>((set, get) => ({
   socket: null,
   socketConnected: false,
   mode: 'disconnected',
   authenticated: false,
+  deriv: { connected: false, authorized: false, streaming: false, loginid: null, isVirtual: true, currency: 'USD', appId: '1089', symbolsAvailable: 0, symbolsTotal: 62 },
   accountType: 'demo',
   balance: 0,
   demoBalance: null,
@@ -217,13 +229,40 @@ export const useTrader = create<TraderState>((set, get) => ({
       set({ socketConnected: false, connectError: 'Trading engine unreachable — retrying…' })
     })
 
-    socket.on('state', (s: any) => set({
-      mode: s.mode, authenticated: s.authenticated, accountType: s.accountType,
-      botRunning: s.botRunning, config: s.config ?? get().config,
-      telegram: s.telegram ? { config: s.telegram.config ?? null, status: s.telegram } : get().telegram,
-    }))
+    socket.on('state', (s: any) => {
+      set({
+        mode: s.mode, authenticated: s.authenticated, accountType: s.accountType,
+        botRunning: s.botRunning, config: s.config ?? get().config,
+        deriv: s.deriv ? {
+          connected: !!s.deriv.connected,
+          authorized: !!s.deriv.authorized,
+          streaming: !!s.deriv.streaming,
+          loginid: s.deriv.loginid ?? null,
+          isVirtual: !!s.deriv.isVirtual,
+          currency: s.deriv.currency ?? 'USD',
+          appId: s.deriv.appId ?? '1089',
+          symbolsAvailable: s.deriv.symbolsAvailable ?? 0,
+          symbolsTotal: s.deriv.symbolsTotal ?? 62,
+        } : {
+          connected: false, authorized: false, streaming: false, loginid: null,
+          isVirtual: true, currency: 'USD', appId: '1089', symbolsAvailable: 0, symbolsTotal: 62,
+        },
+        telegram: s.telegram ? { config: s.telegram.config ?? null, status: s.telegram } : get().telegram,
+      })
+      if (typeof s.chartAsset === 'string' && s.chartAsset) engineChartAsset = s.chartAsset
+    })
     socket.on('assets', (list: AssetInfo[]) => {
       set({ assets: list })
+      // platform switch detected (current chart asset no longer exists in the
+      // engine universe) → follow the engine's chart asset (e.g. R_100 in deriv)
+      const cur = get().chartAsset
+      if (list.length && !list.some(a => a.asset === cur)) {
+        const next = engineChartAsset && list.some(a => a.asset === engineChartAsset)
+          ? engineChartAsset
+          : (list.find(a => a.open) ?? list[0]).asset
+        set({ chartAsset: next, candles: [], forming: null })
+        socket.emit('subscribe', { asset: next })
+      }
       const cfg = get().config
       if ((!cfg?.selectedAssets || !cfg.selectedAssets.length) && list.length) {
         const pre = list.filter(a => a.category === 'otc' && a.open).slice(0, 6).map(a => a.asset)
@@ -305,6 +344,13 @@ export const useTrader = create<TraderState>((set, get) => ({
     const { socket } = get()
     socket?.emit('connect:live', { ssid, region }, (r: any) => {
       if (r && !r.ok) set({ connectError: r.error ?? 'Connection failed' })
+    })
+  },
+
+  connectDeriv: (token) => {
+    const { socket } = get()
+    socket?.emit('connect:deriv', { token: token ?? '' }, (r: any) => {
+      if (r && !r.ok) set({ connectError: r.error ?? 'Deriv connection failed' })
     })
   },
 

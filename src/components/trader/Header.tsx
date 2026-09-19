@@ -7,6 +7,7 @@ import { Switch } from '@/components/ui/switch'
 import { useTrader } from './store'
 import { ConnectDialog } from './ConnectDialog'
 import { HelpDialog } from './HelpDialog'
+import { SettingsDialog } from './SettingsDialog'
 import { Bot, Plug, Activity, Power, Volume2, VolumeX, Bell, BellOff, RotateCcw } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -15,7 +16,7 @@ export function Header() {
   const {
     socketConnected, mode, authenticated, accountType, balance,
     demoBalance, realBalance, setAccount, disconnectPo, botRunning,
-    prefs, setPrefs, resetSim,
+    prefs, setPrefs, resetSim, deriv,
   } = useTrader()
 
   // flash the balance emerald/red on change (trade settlement, reset)
@@ -36,21 +37,31 @@ export function Header() {
     ? 'bg-red-500'
     : mode === 'live' && authenticated
       ? 'bg-emerald-500'
-      : mode === 'simulation'
-        ? 'bg-amber-500'
-        : 'bg-zinc-500'
+      : mode === 'deriv'
+        ? 'bg-emerald-500'
+        : mode === 'simulation'
+          ? 'bg-amber-500'
+          : 'bg-zinc-500'
 
   const statusText = !socketConnected
     ? 'Engine offline'
     : mode === 'live' && authenticated
       ? 'Live · Pocket Option'
-      : mode === 'simulation'
-        ? 'Simulation'
-        : mode === 'live'
-          ? 'Authenticating…'
-          : 'Not connected'
+      : mode === 'live'
+        ? 'Authenticating…'
+        : mode === 'deriv'
+          ? `Deriv · Live Market${deriv.authorized ? (deriv.isVirtual ? ' · Demo' : ' · Real') : ' · Paper'}`
+          : mode === 'simulation'
+            ? 'Simulation'
+            : 'Not connected'
 
   const handleAccountSwitch = (real: boolean) => {
+    if (mode === 'deriv' && !deriv.authorized) {
+      toast.info('Deriv paper mode', {
+        description: 'Connect a Deriv API token (demo or real) to switch accounts',
+      })
+      return
+    }
     const next = real ? 'real' : 'demo'
     if (real && accountType !== 'real') {
       toast.warning('Switching to REAL money account', {
@@ -134,13 +145,20 @@ export function Header() {
             >
               {prefs.notifications ? <Bell className="h-3.5 w-3.5" /> : <BellOff className="h-3.5 w-3.5" />}
             </Button>
+            <SettingsDialog />
             <HelpDialog />
           </div>
 
           {/* Balance display (+ sim reset in simulation mode) */}
           <div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/80 px-3 py-1.5">
-            <span className={`text-[10px] font-bold uppercase ${accountType === 'real' ? 'text-red-400' : 'text-emerald-400'}`}>
-              {accountType === 'real' ? 'REAL' : 'DEMO'}
+            <span className={`text-[10px] font-bold uppercase ${
+              mode === 'deriv' && !deriv.authorized
+                ? 'text-amber-400'
+                : accountType === 'real' ? 'text-red-400' : 'text-emerald-400'
+            }`}>
+              {mode === 'deriv' && !deriv.authorized
+                ? 'PAPER'
+                : accountType === 'real' ? 'REAL' : 'DEMO'}
             </span>
             <span className={cn(
               'font-mono text-sm font-bold tabular-nums text-zinc-50',
@@ -149,7 +167,7 @@ export function Header() {
             )}>
               ${balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </span>
-            {mode === 'simulation' && (
+            {(mode === 'simulation' || (mode === 'deriv' && !deriv.authorized)) && (
               <Button
                 size="sm"
                 variant="ghost"
@@ -163,12 +181,20 @@ export function Header() {
             )}
           </div>
 
-          {/* Demo/Real switch */}
-          <div className="hidden items-center gap-2 sm:flex">
+          {/* Demo/Real switch (locked in deriv mode — token-bound account) */}
+          <div
+            className="hidden items-center gap-2 sm:flex"
+            title={mode === 'deriv'
+              ? deriv.authorized
+                ? `Deriv account ${deriv.loginid} is bound to this API token`
+                : 'Connect a Deriv API token to trade a demo or real account'
+              : undefined}
+          >
             <span className={`text-[10px] font-semibold ${accountType === 'demo' ? 'text-emerald-400' : 'text-zinc-600'}`}>DEMO</span>
             <Switch
               checked={accountType === 'real'}
               onCheckedChange={handleAccountSwitch}
+              disabled={mode === 'deriv'}
               aria-label="Toggle demo/real account"
               className="data-[state=checked]:bg-red-600 data-[state=unchecked]:bg-emerald-700"
             />
